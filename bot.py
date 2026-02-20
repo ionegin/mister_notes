@@ -87,7 +87,6 @@ async def process_ai_action(callback: types.CallbackQuery, state: FSMContext):
     with open("data/prompts.json", "r", encoding="utf-8") as f:
         prompts = json.load(f)
 
-    # Специальный флоу для перевода
     if prompts[prompt_id]['prompt'] == "_translation_flow_":
         await callback.message.answer("На какой язык перевести?\n\nВведи одно слово (например: английский, français, deutsch):")
         await state.set_state(BotStates.waiting_for_language)
@@ -98,7 +97,8 @@ async def process_ai_action(callback: types.CallbackQuery, state: FSMContext):
     system_prompt = prompts[prompt_id]['prompt']
     result = await get_ai_response(text, system_prompt)
     
-    await callback.message.answer(f"✅ **Готово:**\n\n{result}", parse_mode="Markdown")
+    await state.update_data(last_text=result)
+    await callback.message.answer(f"✅ **Готово:**\n\n{result}\n\nЧто сделать с текстом?", parse_mode="Markdown", reply_markup=get_main_menu())
     await callback.answer()
 
 # --- ФЛОУ ПЕРЕВОДА ---
@@ -131,7 +131,9 @@ async def handle_language_input(message: types.Message, state: FSMContext):
     )
 
     result = await get_ai_response(text, system_prompt)
-    await msg.edit_text(f"✅ **Готово:**\n\n{result}", parse_mode="Markdown")
+    await msg.edit_text("✅ Готово")
+    await message.answer(f"✅ **Готово:**\n\n{result}\n\nЧто сделать с текстом?", parse_mode="Markdown", reply_markup=get_main_menu())
+    await state.update_data(last_text=result)
 
 # --- ДОБАВЛЕНИЕ ПРОМТА ---
 
