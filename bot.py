@@ -45,14 +45,6 @@ async def handle_voice(message: types.Message, state: FSMContext):
     await state.update_data(last_text=text)
     await msg.edit_text(f"📝 **Расшифровка:**\n\n{text}\n\nВыберите действие:", parse_mode="Markdown", reply_markup=get_main_menu())
     
-
-    
-@dp.message(F.text)
-async def handle_text(message: types.Message, state: FSMContext):
-    await state.update_data(last_text=message.text)
-    await message.answer("Выберите действие:", reply_markup=get_main_menu())
-
-
 @dp.message(F.video_note)
 async def handle_video_note(message: types.Message, state: FSMContext):
     msg = await message.answer("📥 Скачиваю и расшифровываю...")
@@ -72,6 +64,13 @@ async def handle_video_note(message: types.Message, state: FSMContext):
 
     await state.update_data(last_text=text)
     await msg.edit_text(f"📝 **Расшифровка:**\n\n{text}\n\nВыберите действие:", parse_mode="Markdown", reply_markup=get_main_menu())
+    
+@dp.message(F.text)
+async def handle_text(message: types.Message, state: FSMContext):
+    await state.update_data(last_text=message.text)
+    await message.answer("Выберите действие:", reply_markup=get_main_menu())
+
+
 
 # --- ОБРАБОТКА КНОПОК ---
 
