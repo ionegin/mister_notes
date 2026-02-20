@@ -9,7 +9,6 @@ from aiogram.fsm.state import State, StatesGroup
 from config import BOT_TOKEN, TEMP_DIR
 from core.ai_client import transcribe_voice, get_gemini_response
 from core.keyboards import get_main_menu
-from utils.audio_conv import convert_ogg_to_mp3
 
 # Состояния для FSM
 class BotStates(StatesGroup):
@@ -35,13 +34,8 @@ async def handle_voice(message: types.Message, state: FSMContext):
     ogg_path = os.path.join(TEMP_DIR, f"{file_id}.ogg")
     await bot.download_file(file.file_path, ogg_path)
     
-    # Конвертируем и транскрибируем
-    mp3_path = convert_ogg_to_mp3(ogg_path)
-    text = await transcribe_voice(mp3_path)
-    
-    # Чистим файлы
+    text = await transcribe_voice(ogg_path)
     os.remove(ogg_path)
-    os.remove(mp3_path)
     
     await state.update_data(last_text=text)
     await msg.edit_text(f"📝 **Результат расшифровки:**\n\n{text}", parse_mode="Markdown", reply_markup=get_main_menu())
