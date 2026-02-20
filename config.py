@@ -5,7 +5,7 @@ load_dotenv()
 
 BOT_TOKEN = os.getenv("BOT_TOKEN")
 GROQ_KEY = os.getenv("GROQ_API_KEY")
-GEMINI_KEY = os.getenv("GEMINI_API_KEY")
+LLM_KEY = os.getenv("LLM_API_KEY")
 
 # Путь к папке для временных файлов
 TEMP_DIR = "data/temp_audio"

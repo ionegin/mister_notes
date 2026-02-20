@@ -7,14 +7,14 @@ from aiogram.fsm.context import FSMContext
 from aiogram.fsm.state import State, StatesGroup
 
 from config import BOT_TOKEN, TEMP_DIR
-from core.ai_client import transcribe_voice, get_gemini_response
+from core.ai_client import transcribe_voice, get_ai_response
 from core.keyboards import get_main_menu
 
 # Состояния для FSM
 class BotStates(StatesGroup):
     waiting_for_name = State()
     waiting_for_content = State()
-    processing_text = State()
+    waiting_for_language = State()
 
 bot = Bot(token=BOT_TOKEN)
 dp = Dispatcher()
@@ -34,22 +34,49 @@ async def handle_voice(message: types.Message, state: FSMContext):
     ogg_path = os.path.join(TEMP_DIR, f"{file_id}.ogg")
     await bot.download_file(file.file_path, ogg_path)
     
-    text = await transcribe_voice(ogg_path)
+    raw_text = await transcribe_voice(ogg_path)
     os.remove(ogg_path)
-    
-    await state.update_data(last_text=text)
-    await msg.edit_text(f"📝 **Результат расшифровки:**\n\n{text}", parse_mode="Markdown", reply_markup=get_main_menu())
 
+    await msg.edit_text("✍️ Привожу текст в порядок...")
+    with open("data/prompts.json", "r", encoding="utf-8") as f:
+        prompts = json.load(f)
+    text = await get_ai_response(raw_text, prompts["transcription_cleanup"])
+
+    await state.update_data(last_text=text)
+    await msg.edit_text(f"📝 **Расшифровка:**\n\n{text}\n\nВыберите действие:", parse_mode="Markdown", reply_markup=get_main_menu())
+    
+@dp.message(F.video_note)
+async def handle_video_note(message: types.Message, state: FSMContext):
+    msg = await message.answer("📥 Скачиваю и расшифровываю...")
+    
+    file_id = message.video_note.file_id
+    file = await bot.get_file(file_id)
+    mp4_path = os.path.join(TEMP_DIR, f"{file_id}.mp4")
+    await bot.download_file(file.file_path, mp4_path)
+    
+    raw_text = await transcribe_voice(mp4_path)
+    os.remove(mp4_path)
+
+    await msg.edit_text("✍️ Привожу текст в порядок...")
+    with open("data/prompts.json", "r", encoding="utf-8") as f:
+        prompts = json.load(f)
+    text = await get_ai_response(raw_text, prompts["transcription_cleanup"])
+
+    await state.update_data(last_text=text)
+    await msg.edit_text(f"📝 **Расшифровка:**\n\n{text}\n\nВыберите действие:", parse_mode="Markdown", reply_markup=get_main_menu())
+    
 @dp.message(F.text)
 async def handle_text(message: types.Message, state: FSMContext):
     await state.update_data(last_text=message.text)
     await message.answer("Выберите действие:", reply_markup=get_main_menu())
 
+
+
 # --- ОБРАБОТКА КНОПОК ---
 
 @dp.callback_query(F.data.startswith("ai_"))
 async def process_ai_action(callback: types.CallbackQuery, state: FSMContext):
-    prompt_id = callback.data.split("_")[1]
+    prompt_id = callback.data.split("_", 1)[1]
     user_data = await state.get_data()
     text = user_data.get("last_text")
     
@@ -57,16 +84,56 @@ async def process_ai_action(callback: types.CallbackQuery, state: FSMContext):
         await callback.answer("Текст не найден. Пришлите сообщение заново.")
         return
 
-    await callback.message.edit_text("🤖 Думаю...")
-    
     with open("data/prompts.json", "r", encoding="utf-8") as f:
         prompts = json.load(f)
-    
+
+    if prompts[prompt_id]['prompt'] == "_translation_flow_":
+        await callback.message.answer("На какой язык перевести?\n\nВведи одно слово (например: английский, français, deutsch):")
+        await state.set_state(BotStates.waiting_for_language)
+        await callback.answer()
+        return
+
+    await callback.message.answer("🤖 Думаю...")
     system_prompt = prompts[prompt_id]['prompt']
-    result = await get_gemini_response(text, system_prompt)
+    result = await get_ai_response(text, system_prompt)
     
-    await callback.message.edit_text(f"✅ **Готово:**\n\n{result}", parse_mode="Markdown")
+    await state.update_data(last_text=result)
+    await callback.message.answer(f"✅ **Готово:**\n\n{result}\n\nЧто сделать с текстом?", parse_mode="Markdown", reply_markup=get_main_menu())
     await callback.answer()
+
+# --- ФЛОУ ПЕРЕВОДА ---
+
+@dp.message(BotStates.waiting_for_language)
+async def handle_language_input(message: types.Message, state: FSMContext):
+    lang_input = message.text.strip()
+
+    # Проверка: одно слово
+    if len(lang_input.split()) > 1:
+        await message.answer("Пожалуйста, введи только одно слово — название языка:")
+        return
+
+    user_data = await state.get_data()
+    text = user_data.get("last_text")
+    await state.clear()
+
+    msg = await message.answer("🤖 Перевожу...")
+
+    # Промт для LLM: сначала проверяет что это язык, потом переводит
+    system_prompt = (
+        f"Тебе передано слово: «{lang_input}»\n\n"
+        "Шаг 1. Определи: это название языка? Учитывай любой язык мира, включая написание на самом этом языке "
+        "(например 'français', 'deutsch', '日本語' — всё валидно).\n\n"
+        "Если НЕ язык — ответь строго одной фразой:\n"
+        "❌ Не могу определить язык. Попробуй ещё раз — пришли текст и выбери «Переведи».\n\n"
+        "Если язык — переведи следующий текст на этот язык. "
+        "Верни только перевод, без пояснений и без оригинала.\n\n"
+        "Текст для перевода:\n"
+    )
+
+    result = await get_ai_response(text, system_prompt)
+    await msg.edit_text("✅ Готово")
+    await message.answer(f"✅ **Готово:**\n\n{result}\n\nЧто сделать с текстом?", parse_mode="Markdown", reply_markup=get_main_menu())
+    await state.update_data(last_text=result)
 
 # --- ДОБАВЛЕНИЕ ПРОМТА ---
 
@@ -87,7 +154,7 @@ async def add_prompt_finish(message: types.Message, state: FSMContext):
     data = await state.get_data()
     name = data['new_name']
     prompt_text = message.text
-    p_id = f"custom_{int(asyncio.get_event_loop().time())}" # Уникальный ID
+    p_id = f"custom_{int(asyncio.get_event_loop().time())}"
     
     with open("data/prompts.json", "r+", encoding="utf-8") as f:
         prompts = json.load(f)
