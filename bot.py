@@ -89,16 +89,16 @@ async def process_ai_action(callback: types.CallbackQuery, state: FSMContext):
 
     # Специальный флоу для перевода
     if prompts[prompt_id]['prompt'] == "_translation_flow_":
-        await callback.message.edit_text("На какой язык перевести?\n\nВведи одно слово (например: английский, français, deutsch):")
+        await callback.message.answer("На какой язык перевести?\n\nВведи одно слово (например: английский, français, deutsch):")
         await state.set_state(BotStates.waiting_for_language)
         await callback.answer()
         return
 
-    await callback.message.edit_text("🤖 Думаю...")
+    await callback.message.answer("🤖 Думаю...")
     system_prompt = prompts[prompt_id]['prompt']
     result = await get_ai_response(text, system_prompt)
     
-    await callback.message.edit_text(f"✅ **Готово:**\n\n{result}", parse_mode="Markdown")
+    await callback.message.answer(f"✅ **Готово:**\n\n{result}", parse_mode="Markdown")
     await callback.answer()
 
 # --- ФЛОУ ПЕРЕВОДА ---
