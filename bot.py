@@ -45,10 +45,33 @@ async def handle_voice(message: types.Message, state: FSMContext):
     await state.update_data(last_text=text)
     await msg.edit_text(f"📝 **Расшифровка:**\n\n{text}\n\nВыберите действие:", parse_mode="Markdown", reply_markup=get_main_menu())
     
+
+    
 @dp.message(F.text)
 async def handle_text(message: types.Message, state: FSMContext):
     await state.update_data(last_text=message.text)
     await message.answer("Выберите действие:", reply_markup=get_main_menu())
+
+
+@dp.message(F.video_note)
+async def handle_video_note(message: types.Message, state: FSMContext):
+    msg = await message.answer("📥 Скачиваю и расшифровываю...")
+    
+    file_id = message.video_note.file_id
+    file = await bot.get_file(file_id)
+    mp4_path = os.path.join(TEMP_DIR, f"{file_id}.mp4")
+    await bot.download_file(file.file_path, mp4_path)
+    
+    raw_text = await transcribe_voice(mp4_path)
+    os.remove(mp4_path)
+
+    await msg.edit_text("✍️ Привожу текст в порядок...")
+    with open("data/prompts.json", "r", encoding="utf-8") as f:
+        prompts = json.load(f)
+    text = await get_ai_response(raw_text, prompts["transcription_cleanup"])
+
+    await state.update_data(last_text=text)
+    await msg.edit_text(f"📝 **Расшифровка:**\n\n{text}\n\nВыберите действие:", parse_mode="Markdown", reply_markup=get_main_menu())
 
 # --- ОБРАБОТКА КНОПОК ---
 
