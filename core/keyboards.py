@@ -9,9 +9,10 @@ def get_main_menu():
     with open("data/prompts.json", "r", encoding="utf-8") as f:
         prompts = json.load(f)
     
-    # Создаем кнопки на основе JSON
+# Создаем кнопки на основе JSON
     for p_id, data in prompts.items():
-        builder.row(InlineKeyboardButton(text=data['name'], callback_data=f"ai_{p_id}"))
+        if isinstance(data, dict) and 'name' in data:
+            builder.row(InlineKeyboardButton(text=data['name'], callback_data=f"ai_{p_id}"))    
     
     # Системная кнопка добавления нового промта
     builder.row(InlineKeyboardButton(text="➕ Добавить промт", callback_data="add_new_prompt"))

@@ -1,5 +1,4 @@
 aiogram==3.10.0
 python-dotenv
-google-generativeai
+google-genai
 groq
-pydub

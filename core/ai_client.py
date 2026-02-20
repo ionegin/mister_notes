@@ -1,13 +1,11 @@
 import groq
-import google.generativeai as genai
-from config import GROQ_KEY, GEMINI_KEY
+from config import GROQ_KEY, LLM_KEY
 
-# Инициализация Gemini
-genai.configure(api_key=GEMINI_KEY)
-gemini_model = genai.GenerativeModel('gemini-1.5-flash')
-
-# Инициализация Groq
+# Groq для транскрибации
 groq_client = groq.Groq(api_key=GROQ_KEY)
+
+# Groq для LLM
+llm_client = groq.Groq(api_key=LLM_KEY)
 
 async def transcribe_voice(file_path: str) -> str:
     """Транскрибация через Groq (Whisper-3)"""
@@ -18,8 +16,13 @@ async def transcribe_voice(file_path: str) -> str:
         )
     return translation.text
 
-async def get_gemini_response(text: str, system_prompt: str) -> str:
-    """Запрос к Gemini с заданным промтом"""
-    full_prompt = f"{system_prompt}\n\nТекст для обработки:\n{text}"
-    response = gemini_model.generate_content(full_prompt)
-    return response.text
+async def get_ai_response(text: str, system_prompt: str) -> str:
+    """Запрос к LLM через Groq"""
+    response = llm_client.chat.completions.create(
+        model="llama-3.3-70b-versatile",
+        messages=[
+            {"role": "system", "content": system_prompt},
+            {"role": "user", "content": text},
+        ]
+    )
+    return response.choices[0].message.content
