@@ -44,7 +44,7 @@ async def handle_voice(message: types.Message, state: FSMContext):
 
     await state.update_data(last_text=text)
     await msg.edit_text(f"📝 **Расшифровка:**\n\n{text}\n\nВыберите действие:", parse_mode="Markdown", reply_markup=get_main_menu())
-    
+
 @dp.message(F.video_note)
 async def handle_video_note(message: types.Message, state: FSMContext):
     msg = await message.answer("📥 Скачиваю и расшифровываю...")
@@ -64,12 +64,6 @@ async def handle_video_note(message: types.Message, state: FSMContext):
 
     await state.update_data(last_text=text)
     await msg.edit_text(f"📝 **Расшифровка:**\n\n{text}\n\nВыберите действие:", parse_mode="Markdown", reply_markup=get_main_menu())
-    
-@dp.message(F.text)
-async def handle_text(message: types.Message, state: FSMContext):
-    await state.update_data(last_text=message.text)
-    await message.answer("Выберите действие:", reply_markup=get_main_menu())
-
 
 
 # --- ОБРАБОТКА КНОПОК ---
@@ -88,8 +82,8 @@ async def process_ai_action(callback: types.CallbackQuery, state: FSMContext):
         prompts = json.load(f)
 
     if prompts[prompt_id]['prompt'] == "_translation_flow_":
-        await callback.message.answer("На какой язык перевести?\n\nВведи одно слово (например: английский, français, deutsch):")
         await state.set_state(BotStates.waiting_for_language)
+        await callback.message.answer("На какой язык перевести?\n\nВведи одно слово (например: английский, français, deutsch):")
         await callback.answer()
         return
 
@@ -101,47 +95,33 @@ async def process_ai_action(callback: types.CallbackQuery, state: FSMContext):
     await callback.message.answer(f"✅ **Готово:**\n\n{result}\n\nЧто сделать с текстом?", parse_mode="Markdown", reply_markup=get_main_menu())
     await callback.answer()
 
-# --- ФЛОУ ПЕРЕВОДА ---
+@dp.callback_query(F.data == "add_new_prompt")
+async def add_prompt_start(callback: types.CallbackQuery, state: FSMContext):
+    await callback.message.answer("Введите название для новой кнопки (например: 'Юмор'):")
+    await state.set_state(BotStates.waiting_for_name)
+    await callback.answer()
+
+
+# --- FSM ХЕНДЛЕРЫ (должны быть выше handle_text) ---
 
 @dp.message(BotStates.waiting_for_language)
 async def handle_language_input(message: types.Message, state: FSMContext):
     lang_input = message.text.strip()
 
-    # Проверка: одно слово
     if len(lang_input.split()) > 1:
         await message.answer("Пожалуйста, введи только одно слово — название языка:")
         return
 
     user_data = await state.get_data()
     text = user_data.get("last_text")
-    await state.clear()
+    await state.set_state(None)
 
     msg = await message.answer("🤖 Перевожу...")
-
-    # Промт для LLM: сначала проверяет что это язык, потом переводит
-    system_prompt = (
-        f"Тебе передано слово: «{lang_input}»\n\n"
-        "Шаг 1. Определи: это название языка? Учитывай любой язык мира, включая написание на самом этом языке "
-        "(например 'français', 'deutsch', '日本語' — всё валидно).\n\n"
-        "Если НЕ язык — ответь строго одной фразой:\n"
-        "❌ Не могу определить язык. Попробуй ещё раз — пришли текст и выбери «Переведи».\n\n"
-        "Если язык — переведи следующий текст на этот язык. "
-        "Верни только перевод, без пояснений и без оригинала.\n\n"
-        "Текст для перевода:\n"
-    )
-
+    system_prompt = f"Переведи текст на {lang_input}. Верни только перевод, без пояснений и без оригинала."
     result = await get_ai_response(text, system_prompt)
-    await msg.edit_text("✅ Готово")
-    await message.answer(f"✅ **Готово:**\n\n{result}\n\nЧто сделать с текстом?", parse_mode="Markdown", reply_markup=get_main_menu())
+
     await state.update_data(last_text=result)
-
-# --- ДОБАВЛЕНИЕ ПРОМТА ---
-
-@dp.callback_query(F.data == "add_new_prompt")
-async def add_prompt_start(callback: types.CallbackQuery, state: FSMContext):
-    await callback.message.answer("Введите название для новой кнопки (например: 'Юмор'):")
-    await state.set_state(BotStates.waiting_for_name)
-    await callback.answer()
+    await msg.edit_text(f"✅ **Готово:**\n\n{result}\n\nЧто сделать с текстом?", parse_mode="Markdown", reply_markup=get_main_menu())
 
 @dp.message(BotStates.waiting_for_name)
 async def add_prompt_name(message: types.Message, state: FSMContext):
@@ -165,6 +145,15 @@ async def add_prompt_finish(message: types.Message, state: FSMContext):
     
     await message.answer(f"✅ Кнопка '{name}' успешно добавлена!")
     await state.clear()
+
+
+# --- ОБРАБОТКА ТЕКСТА (всегда последний) ---
+
+@dp.message(F.text)
+async def handle_text(message: types.Message, state: FSMContext):
+    await state.update_data(last_text=message.text)
+    await message.answer("Выберите действие:", reply_markup=get_main_menu())
+
 
 async def main():
     await dp.start_polling(bot)
