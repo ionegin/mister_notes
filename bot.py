@@ -33,7 +33,8 @@ HELP_TEXT = (
     "/rawvoice — следующая голосовуха вернётся сырой (без ИИ-вычитки)\n\n"
     "**Как пользоваться:**\n"
     "• Пришли текст → выбери действие из меню\n"
-    "• Пришли голосовое или кругляшок → расшифровка → меню\n\n"
+    "• Пришли голосовое или кругляшок → расшифровка → меню\n"
+    "• Несколько голосовых/кружочков подряд — объединятся автоматически\n\n"
     "**Лимиты:**\n"
     "• Голос / видео — до 10 минут\n"
     "• Текст — до 3000 символов (~1.5 страницы А4)"
@@ -45,6 +46,8 @@ MAX_TEXT_LENGTH = 3000
 # Rate limiting
 user_requests: dict = {}
 
+# Таймер объединения голосовых {user_id: ([paths], task, status_msg)}
+pending_voices: dict = {}
 def check_rate_limit(user_id: int, max_requests: int = 10, window: int = 60) -> bool:
     now = time.time()
     timestamps = user_requests.get(user_id, [])
@@ -85,10 +88,27 @@ def find_button(prompts: dict, target_id: str) -> dict | None:
                 return data["children"][target_id]
     return None
 
-def get_result_menu():
-    """Меню после результата: кнопка озвучки + основное меню"""
+def parse_can_compress(result: str) -> tuple[str, bool]:
+    lines = result.strip().split("\n")
+    can_compress = False
+    clean_lines = []
+    for line in lines:
+        stripped = line.strip()
+        if stripped.startswith("{") and "can_compress" in stripped:
+            try:
+                data = json.loads(stripped)
+                can_compress = data.get("can_compress", False)
+            except Exception:
+                pass
+        else:
+            clean_lines.append(line)
+    return "\n".join(clean_lines).strip(), can_compress
+
+def get_result_menu(can_compress: bool = False):
     builder = InlineKeyboardBuilder()
     builder.row(InlineKeyboardButton(text="🔊 Озвучить", callback_data="tts_result"))
+    if can_compress:
+        builder.row(InlineKeyboardButton(text="⚡️ Сжать сильнее", callback_data="ai_summarize_harder"))
     for row in get_main_menu().inline_keyboard:
         builder.row(*row)
     return builder.as_markup()
@@ -108,7 +128,35 @@ async def cmd_rawvoice(message: types.Message, state: FSMContext):
     await state.update_data(raw_mode=True)
     await message.answer("Окей, следующая голосовуха вернётся без вычитки.")
 
-# --- ГОЛОС ---
+# --- ГОЛОС С ОБЪЕДИНЕНИЕМ ---
+
+async def transcribe_and_cleanup(file_path: str, prompts: dict) -> str:
+    raw_text = await transcribe_voice(file_path)
+    text = await get_ai_response(raw_text, prompts["transcription_cleanup"])
+    return text
+
+async def flush_voice_queue(user_id: int, state: FSMContext, last_message: types.Message):
+    await asyncio.sleep(3.0)
+    entry = pending_voices.pop(user_id, None)
+    if not entry:
+        return
+    file_paths, _, s_msg = entry
+    prompts = load_prompts()
+    texts = []
+    for path in file_paths:
+        try:
+            text = await transcribe_and_cleanup(path, prompts)
+            texts.append(text)
+        except Exception as e:
+            texts.append(f"[ошибка: {ERROR_MESSAGES.get(str(e), '?')}]")
+        finally:
+            if os.path.exists(path):
+                os.remove(path)
+    combined = "\n\n---\n\n".join(texts)
+    await state.update_data(last_text=combined)
+    count = len(texts)
+    label = f"📝 **Расшифровка ({count} сообщений):**\n\n" if count > 1 else "📝 **Расшифровка:**\n\n"
+    await s_msg.edit_text(f"{label}{combined}\n\nВыберите действие:", parse_mode="Markdown", reply_markup=get_main_menu())
 
 @dp.message(F.voice)
 async def handle_voice(message: types.Message, state: FSMContext):
@@ -119,36 +167,38 @@ async def handle_voice(message: types.Message, state: FSMContext):
         await message.answer("⏱ Голосовое слишком длинное. Максимум — 10 минут.")
         return
 
-    msg = await message.answer("📥 Скачиваю и расшифровываю...")
+    user_id = message.from_user.id
     file = await bot.get_file(message.voice.file_id)
     ogg_path = os.path.join(TEMP_DIR, f"{message.voice.file_id}.ogg")
     await bot.download_file(file.file_path, ogg_path)
 
-    try:
-        raw_text = await transcribe_voice(ogg_path)
-    except Exception as e:
-        await msg.edit_text(ERROR_MESSAGES.get(str(e), ERROR_MESSAGES["unknown_error"]))
-        return
-    finally:
-        if os.path.exists(ogg_path):
-            os.remove(ogg_path)
-
     user_data = await state.get_data()
     if user_data.get("raw_mode"):
         await state.update_data(raw_mode=False)
-        await msg.edit_text(f"📝 **Сырая расшифровка:**\n\n{raw_text}", parse_mode="Markdown")
+        try:
+            raw_text = await transcribe_voice(ogg_path)
+        except Exception as e:
+            await message.answer(ERROR_MESSAGES.get(str(e), ERROR_MESSAGES["unknown_error"]))
+            return
+        finally:
+            if os.path.exists(ogg_path):
+                os.remove(ogg_path)
+        await message.answer(f"📝 **Сырая расшифровка:**\n\n{raw_text}", parse_mode="Markdown")
         return
 
-    await msg.edit_text("✍️ Привожу текст в порядок...")
-    try:
-        prompts = load_prompts()
-        text = await get_ai_response(raw_text, prompts["transcription_cleanup"])
-    except Exception as e:
-        await msg.edit_text(ERROR_MESSAGES.get(str(e), ERROR_MESSAGES["unknown_error"]))
-        return
+    if user_id in pending_voices:
+        paths, task, status_msg = pending_voices[user_id]
+        task.cancel()
+        paths.append(ogg_path)
+        pending_voices[user_id] = (paths, None, status_msg)
+    else:
+        status_msg = await message.answer("📥 Расшифровываю...")
+        paths = [ogg_path]
+        pending_voices[user_id] = (paths, None, status_msg)
 
-    await state.update_data(last_text=text)
-    await msg.edit_text(f"📝 **Расшифровка:**\n\n{text}\n\nВыберите действие:", parse_mode="Markdown", reply_markup=get_main_menu())
+    task = asyncio.create_task(flush_voice_queue(user_id, state, message))
+    paths, _, s_msg = pending_voices[user_id]
+    pending_voices[user_id] = (paths, task, s_msg)
 
 @dp.message(F.video_note)
 async def handle_video_note(message: types.Message, state: FSMContext):
@@ -159,36 +209,38 @@ async def handle_video_note(message: types.Message, state: FSMContext):
         await message.answer("⏱ Видео слишком длинное. Максимум — 10 минут.")
         return
 
-    msg = await message.answer("📥 Скачиваю и расшифровываю...")
+    user_id = message.from_user.id
     file = await bot.get_file(message.video_note.file_id)
     mp4_path = os.path.join(TEMP_DIR, f"{message.video_note.file_id}.mp4")
     await bot.download_file(file.file_path, mp4_path)
 
-    try:
-        raw_text = await transcribe_voice(mp4_path)
-    except Exception as e:
-        await msg.edit_text(ERROR_MESSAGES.get(str(e), ERROR_MESSAGES["unknown_error"]))
-        return
-    finally:
-        if os.path.exists(mp4_path):
-            os.remove(mp4_path)
-
     user_data = await state.get_data()
     if user_data.get("raw_mode"):
         await state.update_data(raw_mode=False)
-        await msg.edit_text(f"📝 **Сырая расшифровка:**\n\n{raw_text}", parse_mode="Markdown")
+        try:
+            raw_text = await transcribe_voice(mp4_path)
+        except Exception as e:
+            await message.answer(ERROR_MESSAGES.get(str(e), ERROR_MESSAGES["unknown_error"]))
+            return
+        finally:
+            if os.path.exists(mp4_path):
+                os.remove(mp4_path)
+        await message.answer(f"📝 **Сырая расшифровка:**\n\n{raw_text}", parse_mode="Markdown")
         return
 
-    await msg.edit_text("✍️ Привожу текст в порядок...")
-    try:
-        prompts = load_prompts()
-        text = await get_ai_response(raw_text, prompts["transcription_cleanup"])
-    except Exception as e:
-        await msg.edit_text(ERROR_MESSAGES.get(str(e), ERROR_MESSAGES["unknown_error"]))
-        return
+    if user_id in pending_voices:
+        paths, task, status_msg = pending_voices[user_id]
+        task.cancel()
+        paths.append(mp4_path)
+        pending_voices[user_id] = (paths, None, status_msg)
+    else:
+        status_msg = await message.answer("📥 Расшифровываю...")
+        paths = [mp4_path]
+        pending_voices[user_id] = (paths, None, status_msg)
 
-    await state.update_data(last_text=text)
-    await msg.edit_text(f"📝 **Расшифровка:**\n\n{text}\n\nВыберите действие:", parse_mode="Markdown", reply_markup=get_main_menu())
+    task = asyncio.create_task(flush_voice_queue(user_id, state, message))
+    paths, _, s_msg = pending_voices[user_id]
+    pending_voices[user_id] = (paths, task, s_msg)
 
 @dp.message(F.text, StateFilter(None))
 async def handle_text(message: types.Message, state: FSMContext):
@@ -196,7 +248,7 @@ async def handle_text(message: types.Message, state: FSMContext):
         await message.answer(ERROR_MESSAGES["rate_limit"])
         return
     if len(message.text) > MAX_TEXT_LENGTH:
-        await message.answer(f"📄 Текст слишком длинный. Максимум — {MAX_TEXT_LENGTH} символов (~1.5 страницы А4).")
+        await message.answer(f"📄 Текст слишком длинный. Максимум — {MAX_TEXT_LENGTH} символов.")
         return
     await state.update_data(last_text=message.text)
     await message.answer("Выберите действие:", reply_markup=get_main_menu())
@@ -266,17 +318,22 @@ async def process_ai_action(callback: types.CallbackQuery, state: FSMContext):
 
     await callback.message.answer("🤖 Думаю...")
     try:
-        result = await get_ai_response(text, button['prompt'])
+        raw_result = await get_ai_response(text, button['prompt'])
     except Exception as e:
         await callback.message.answer(ERROR_MESSAGES.get(str(e), ERROR_MESSAGES["unknown_error"]))
         await callback.answer()
         return
 
+    if prompt_id == "summarize":
+        result, can_compress = parse_can_compress(raw_result)
+    else:
+        result = raw_result
+        can_compress = False
     await state.update_data(last_text=result)
     await callback.message.answer(
         f"✅ **Готово:**\n\n{result}\n\nЧто сделать с текстом?",
         parse_mode="Markdown",
-        reply_markup=get_result_menu()
+        reply_markup=get_result_menu(can_compress)
     )
     await callback.answer()
 
@@ -304,7 +361,11 @@ async def handle_language_input(message: types.Message, state: FSMContext):
         await msg.edit_text(ERROR_MESSAGES.get(str(e), ERROR_MESSAGES["unknown_error"]))
         return
     await msg.edit_text("✅ Готово")
-    await message.answer(f"✅ **Готово:**\n\n{result}\n\nЧто сделать с текстом?", parse_mode="Markdown", reply_markup=get_result_menu())
+    await message.answer(
+        f"✅ **Готово:**\n\n{result}\n\nЧто сделать с текстом?",
+        parse_mode="Markdown",
+        reply_markup=get_result_menu()
+    )
     await state.update_data(last_text=result)
 
 # --- ФЛОУ БРИФ ВСТРЕЧИ ---
@@ -345,7 +406,11 @@ async def handle_meeting_file(message: types.Message, state: FSMContext):
         await msg.edit_text(ERROR_MESSAGES.get(str(e), ERROR_MESSAGES["unknown_error"]))
         return
     await state.update_data(last_text=result)
-    await msg.edit_text(f"✅ **Бриф:**\n\n{result}\n\nЧто сделать с текстом?", parse_mode="Markdown", reply_markup=get_result_menu())
+    await msg.edit_text(
+        f"✅ **Бриф:**\n\n{result}\n\nЧто сделать с текстом?",
+        parse_mode="Markdown",
+        reply_markup=get_result_menu()
+    )
 
 # ADD_PROMPT_FEATURE:
 # @dp.callback_query(F.data == "add_new_prompt")
