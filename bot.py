@@ -357,12 +357,12 @@ async def process_ai_action(callback: types.CallbackQuery, state: FSMContext):
         await callback.answer("Текст не найден. Пришлите сообщение заново.")
         return
 
+    await callback.answer()
     await callback.message.answer("🤖 Думаю...")
     try:
         raw_result = await get_ai_response(text, button['prompt'])
     except Exception:
         await callback.message.answer(ERROR_MESSAGES["unknown_error"])
-        await callback.answer()
         return
 
     if prompt_id in ("summarize", "summarize_harder"):
@@ -377,7 +377,6 @@ async def process_ai_action(callback: types.CallbackQuery, state: FSMContext):
         parse_mode="HTML",
         reply_markup=get_result_menu(can_compress)
     )
-    await callback.answer()
 
 # --- FSM ХЕНДЛЕРЫ ---
 
