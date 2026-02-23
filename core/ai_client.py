@@ -1,3 +1,4 @@
+import asyncio
 import groq
 import logging
 from elevenlabs.client import ElevenLabs
@@ -18,11 +19,14 @@ async def transcribe_voice(file_path: str) -> str:
     # TEMP: язык захардкожен как ru — нужно заменить на динамическое определение языка пользователя
     try:
         with open(file_path, "rb") as file:
-            translation = groq_client.audio.transcriptions.create(
-                file=(file_path, file.read()),
+            file_content = file.read()
+        translation = await asyncio.to_thread(
+            lambda: groq_client.audio.transcriptions.create(
+                file=(file_path, file_content),
                 model="whisper-large-v3",
                 language="ru",
             )
+        )
         return translation.text
     except groq.RateLimitError:
         raise Exception("rate_limit")
@@ -35,12 +39,14 @@ async def transcribe_voice(file_path: str) -> str:
 async def get_ai_response(text: str, system_prompt: str) -> str:
     """Запрос к LLM через Groq"""
     try:
-        response = llm_client.chat.completions.create(
-            model="llama-3.3-70b-versatile",
-            messages=[
-                {"role": "system", "content": system_prompt},
-                {"role": "user", "content": text},
-            ]
+        response = await asyncio.to_thread(
+            lambda: llm_client.chat.completions.create(
+                model="llama-3.3-70b-versatile",
+                messages=[
+                    {"role": "system", "content": system_prompt + "\n\n" + text},
+                    {"role": "user", "content": "Выполни задачу."},
+                ]
+            )
         )
         return response.choices[0].message.content
     except groq.RateLimitError:
@@ -54,13 +60,15 @@ async def get_ai_response(text: str, system_prompt: str) -> str:
 async def text_to_speech(text: str) -> bytes:
     """TTS через ElevenLabs — возвращает аудио в байтах"""
     try:
-        audio = tts_client.text_to_speech.convert(
-            voice_id="pNInz6obpgDQGcFmaJgB",  # Adam — нейтральный мужской, поддерживает русский
-            text=text,
-            model_id="eleven_multilingual_v2",
-            voice_settings=VoiceSettings(stability=0.5, similarity_boost=0.75),
+        audio = await asyncio.to_thread(
+            lambda: b"".join(tts_client.text_to_speech.convert(
+                voice_id="pNInz6obpgDQGcFmaJgB",  # Adam — нейтральный мужской, поддерживает русский
+                text=text,
+                model_id="eleven_multilingual_v2",
+                voice_settings=VoiceSettings(stability=0.5, similarity_boost=0.75),
+            ))
         )
-        return b"".join(audio)
+        return audio
     except Exception as e:
         logging.error(f"TTS error: {e}")
         raise Exception("tts_error")
