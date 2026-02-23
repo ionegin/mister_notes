@@ -171,28 +171,45 @@ async def transcribe_and_cleanup(file_path: str, prompts: dict) -> str:
     text = await get_ai_response(raw_text, prompts["transcription_cleanup"])
     return text
 
-async def flush_voice_queue(user_id: int, state: FSMContext, last_message: types.Message):
-    await asyncio.sleep(3.0)
+
+async def flush_voice_queue(user_id: int, state: FSMContext):
+    await asyncio.sleep(4.0)
     entry = pending_voices.pop(user_id, None)
     if not entry:
         return
-    file_paths, _, s_msg = entry
+
+    file_ids = entry["file_ids"]
+    status_msg = entry["status_msg"]
     prompts = load_prompts()
-    texts = []
-    for path in file_paths:
-        try:
-            text = await transcribe_and_cleanup(path, prompts)
-            texts.append(text)
-        except Exception as e:
-            texts.append(f"[ошибка: {ERROR_MESSAGES.get(str(e), '?')}]")
-        finally:
-            if os.path.exists(path):
-                os.remove(path)
+
+    semaphore = asyncio.Semaphore(3)  # максимум 3 параллельных запроса к Groq
+
+    async def process_one(file_id, ext):
+        path = os.path.join(TEMP_DIR, f"{file_id}.{ext}")
+        async with semaphore:
+            try:
+                tg_file = await bot.get_file(file_id)
+                await bot.download_file(tg_file.file_path, path)
+                return await transcribe_and_cleanup(path, prompts)
+            except Exception:
+                return "[ошибка расшифровки]"
+            finally:
+                if os.path.exists(path):
+                    os.remove(path)
+
+    results = await asyncio.gather(*[process_one(fid, ext) for fid, ext in file_ids])
+    texts = list(results)
+
     combined = "\n\n---\n\n".join(texts)
     await state.update_data(last_text=combined)
     count = len(texts)
     label = f"📝 **Расшифровка ({count} сообщений):**\n\n" if count > 1 else "📝 **Расшифровка:**\n\n"
-    await s_msg.edit_text(f"{label}{combined}\n\nВыберите действие:", parse_mode="Markdown", reply_markup=get_main_menu())
+    await status_msg.edit_text(
+        f"{label}{combined}\n\nВыберите действие:",
+        parse_mode="Markdown",
+        reply_markup=get_main_menu()
+    )
+
 
 @dp.message(F.voice)
 async def handle_voice(message: types.Message, state: FSMContext):
