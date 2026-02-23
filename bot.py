@@ -19,16 +19,13 @@ logging.basicConfig(level=logging.INFO)
 
 WELCOME_TEXT = (
     "Привет! Я помогу обработать текст или голос.\n\n"
+    "Умею: сократить, перевести на любой язык, изменить стиль.\n"
     "Пришли текст, голосовуху или кругляшок — и увидишь что можно сделать.\n\n"
-    "Пришли несколько голосовых/кружочков одним репостом, чтобы расшифровать их вместе"
     "Команды:\n"
-    "Умею бережно сокращать сообщения до основных тезисов,, переводить на любой существующий в Мире язык, изменять стиль сообщений.\n"
-   
     "/help — список команд\n"
     "/rawvoice — следующая голосовуха без вычитки ИИ"
-    
 )
-                
+
 HELP_TEXT = (
     "📖 **Команды:**\n\n"
     "/start — приветствие\n"
@@ -43,14 +40,14 @@ HELP_TEXT = (
     "• Текст — до 3000 символов (~1.5 страницы А4)"
 )
 
+ADMIN_ID = 250656533  # замени на свой Telegram user_id
+
 MAX_VOICE_DURATION = 600
 MAX_TEXT_LENGTH = 3000
 
-# Rate limiting
 user_requests: dict = {}
-
-# Таймер объединения голосовых {user_id: ([paths], task, status_msg)}
 pending_voices: dict = {}
+voice_lock = asyncio.Lock()
 
 def check_rate_limit(user_id: int, max_requests: int = 10, window: int = 60) -> bool:
     now = time.time()
@@ -72,9 +69,6 @@ ERROR_MESSAGES = {
 class BotStates(StatesGroup):
     waiting_for_language = State()
     waiting_for_meeting_file = State()
-    # ADD_PROMPT_FEATURE:
-    # waiting_for_name = State()
-    # waiting_for_content = State()
 
 bot = Bot(token=BOT_TOKEN)
 dp = Dispatcher()
@@ -142,8 +136,6 @@ async def cmd_rawvoice(message: types.Message, state: FSMContext):
     await state.update_data(raw_mode=True)
     await message.answer("Окей, следующая голосовуха вернётся без вычитки.")
 
-# --- ГОЛОС С ОБЪЕДИНЕНИЕМ ---
-
 @dp.message(Command("broadcast"))
 async def cmd_broadcast(message: types.Message):
     if message.from_user.id != ADMIN_ID:
@@ -155,22 +147,20 @@ async def cmd_broadcast(message: types.Message):
     with open("data/users.json", "r", encoding="utf-8") as f:
         users = json.load(f)
     ok, fail = 0, 0
-    for user_id in users:
+    for uid in users:
         try:
-            await bot.send_message(user_id, text)
+            await bot.send_message(uid, text)
             ok += 1
         except Exception:
             fail += 1
     await message.answer(f"✅ Отправлено: {ok}\n❌ Не доставлено: {fail}")
-    
-# --- СКЛЕЙКА ГОЛОСОВЫХ ---
 
+# --- СКЛЕЙКА ГОЛОСОВЫХ ---
 
 async def transcribe_and_cleanup(file_path: str, prompts: dict) -> str:
     raw_text = await transcribe_voice(file_path)
     text = await get_ai_response(raw_text, prompts["transcription_cleanup"])
     return text
-
 
 async def flush_voice_queue(user_id: int, state: FSMContext):
     await asyncio.sleep(4.0)
@@ -181,8 +171,7 @@ async def flush_voice_queue(user_id: int, state: FSMContext):
     file_ids = entry["file_ids"]
     status_msg = entry["status_msg"]
     prompts = load_prompts()
-
-    semaphore = asyncio.Semaphore(3)  # максимум 3 параллельных запроса к Groq
+    semaphore = asyncio.Semaphore(3)
 
     async def process_one(file_id, ext):
         path = os.path.join(TEMP_DIR, f"{file_id}.{ext}")
@@ -210,7 +199,6 @@ async def flush_voice_queue(user_id: int, state: FSMContext):
         reply_markup=get_main_menu()
     )
 
-
 @dp.message(F.voice)
 async def handle_voice(message: types.Message, state: FSMContext):
     if not check_rate_limit(message.from_user.id):
@@ -221,17 +209,18 @@ async def handle_voice(message: types.Message, state: FSMContext):
         return
 
     user_id = message.from_user.id
-    file = await bot.get_file(message.voice.file_id)
-    ogg_path = os.path.join(TEMP_DIR, f"{message.voice.file_id}.ogg")
-    await bot.download_file(file.file_path, ogg_path)
+    file_id = message.voice.file_id
 
     user_data = await state.get_data()
     if user_data.get("raw_mode"):
         await state.update_data(raw_mode=False)
         try:
+            tg_file = await bot.get_file(file_id)
+            ogg_path = os.path.join(TEMP_DIR, f"{file_id}.ogg")
+            await bot.download_file(tg_file.file_path, ogg_path)
             raw_text = await transcribe_voice(ogg_path)
-        except Exception as e:
-            await message.answer(ERROR_MESSAGES.get(str(e), ERROR_MESSAGES["unknown_error"]))
+        except Exception:
+            await message.answer(ERROR_MESSAGES["unknown_error"])
             return
         finally:
             if os.path.exists(ogg_path):
@@ -239,19 +228,17 @@ async def handle_voice(message: types.Message, state: FSMContext):
         await message.answer(f"📝 **Сырая расшифровка:**\n\n{raw_text}", parse_mode="Markdown")
         return
 
-    if user_id in pending_voices:
-        paths, task, status_msg = pending_voices[user_id]
-        task.cancel()
-        paths.append(ogg_path)
-        pending_voices[user_id] = (paths, None, status_msg)
-    else:
-        status_msg = await message.answer("📥 Расшифровываю...")
-        paths = [ogg_path]
-        pending_voices[user_id] = (paths, None, status_msg)
+    async with voice_lock:
+        if user_id in pending_voices:
+            entry = pending_voices[user_id]
+            entry["task"].cancel()
+            entry["file_ids"].append((file_id, "ogg"))
+        else:
+            status_msg = await message.answer("📥 Расшифровываю...")
+            pending_voices[user_id] = {"file_ids": [(file_id, "ogg")], "task": None, "status_msg": status_msg}
 
-    task = asyncio.create_task(flush_voice_queue(user_id, state, message))
-    paths, _, s_msg = pending_voices[user_id]
-    pending_voices[user_id] = (paths, task, s_msg)
+        task = asyncio.create_task(flush_voice_queue(user_id, state))
+        pending_voices[user_id]["task"] = task
 
 @dp.message(F.video_note)
 async def handle_video_note(message: types.Message, state: FSMContext):
@@ -263,17 +250,18 @@ async def handle_video_note(message: types.Message, state: FSMContext):
         return
 
     user_id = message.from_user.id
-    file = await bot.get_file(message.video_note.file_id)
-    mp4_path = os.path.join(TEMP_DIR, f"{message.video_note.file_id}.mp4")
-    await bot.download_file(file.file_path, mp4_path)
+    file_id = message.video_note.file_id
 
     user_data = await state.get_data()
     if user_data.get("raw_mode"):
         await state.update_data(raw_mode=False)
         try:
+            tg_file = await bot.get_file(file_id)
+            mp4_path = os.path.join(TEMP_DIR, f"{file_id}.mp4")
+            await bot.download_file(tg_file.file_path, mp4_path)
             raw_text = await transcribe_voice(mp4_path)
-        except Exception as e:
-            await message.answer(ERROR_MESSAGES.get(str(e), ERROR_MESSAGES["unknown_error"]))
+        except Exception:
+            await message.answer(ERROR_MESSAGES["unknown_error"])
             return
         finally:
             if os.path.exists(mp4_path):
@@ -281,32 +269,17 @@ async def handle_video_note(message: types.Message, state: FSMContext):
         await message.answer(f"📝 **Сырая расшифровка:**\n\n{raw_text}", parse_mode="Markdown")
         return
 
-    if user_id in pending_voices:
-        paths, task, status_msg = pending_voices[user_id]
-        task.cancel()
-        paths.append(mp4_path)
-        pending_voices[user_id] = (paths, None, status_msg)
-    else:
-        status_msg = await message.answer("📥 Расшифровываю...")
-        paths = [mp4_path]
-        pending_voices[user_id] = (paths, None, status_msg)
+    async with voice_lock:
+        if user_id in pending_voices:
+            entry = pending_voices[user_id]
+            entry["task"].cancel()
+            entry["file_ids"].append((file_id, "mp4"))
+        else:
+            status_msg = await message.answer("📥 Расшифровываю...")
+            pending_voices[user_id] = {"file_ids": [(file_id, "mp4")], "task": None, "status_msg": status_msg}
 
-    task = asyncio.create_task(flush_voice_queue(user_id, state, message))
-    paths, _, s_msg = pending_voices[user_id]
-    pending_voices[user_id] = (paths, task, s_msg)
-
-# --- ТЕКСТ ---
-
-@dp.message(F.text, StateFilter(None))
-async def handle_text(message: types.Message, state: FSMContext):
-    if not check_rate_limit(message.from_user.id):
-        await message.answer(ERROR_MESSAGES["rate_limit"])
-        return
-    if len(message.text) > MAX_TEXT_LENGTH:
-        await message.answer(f"📄 Текст слишком длинный. Максимум — {MAX_TEXT_LENGTH} символов.")
-        return
-    await state.update_data(last_text=message.text)
-    await message.answer("Выберите действие:", reply_markup=get_main_menu())
+        task = asyncio.create_task(flush_voice_queue(user_id, state))
+        pending_voices[user_id]["task"] = task
 
 # --- КНОПКИ ---
 
@@ -328,8 +301,8 @@ async def tts_result(callback: types.CallbackQuery, state: FSMContext):
         audio_file = BytesIO(audio_bytes)
         audio_file.name = "result.mp3"
         await callback.message.answer_voice(audio_file)
-    except Exception as e:
-        await callback.message.answer(ERROR_MESSAGES.get(str(e), ERROR_MESSAGES["tts_error"]))
+    except Exception:
+        await callback.message.answer(ERROR_MESSAGES["tts_error"])
     await callback.answer()
 
 @dp.callback_query(F.data.startswith("ai_"))
@@ -374,12 +347,12 @@ async def process_ai_action(callback: types.CallbackQuery, state: FSMContext):
     await callback.message.answer("🤖 Думаю...")
     try:
         raw_result = await get_ai_response(text, button['prompt'])
-    except Exception as e:
-        await callback.message.answer(ERROR_MESSAGES.get(str(e), ERROR_MESSAGES["unknown_error"]))
+    except Exception:
+        await callback.message.answer(ERROR_MESSAGES["unknown_error"])
         await callback.answer()
         return
 
-    if prompt_id == "summarize":
+    if prompt_id in ("summarize", "summarize_harder"):
         result, can_compress = parse_can_compress(raw_result)
     else:
         result = raw_result
@@ -393,7 +366,7 @@ async def process_ai_action(callback: types.CallbackQuery, state: FSMContext):
     )
     await callback.answer()
 
-# --- ФЛОУ ПЕРЕВОДА ---
+# --- FSM ХЕНДЛЕРЫ (выше handle_text) ---
 
 @dp.message(BotStates.waiting_for_language)
 async def handle_language_input(message: types.Message, state: FSMContext):
@@ -403,7 +376,7 @@ async def handle_language_input(message: types.Message, state: FSMContext):
         return
     user_data = await state.get_data()
     text = user_data.get("last_text")
-    await state.clear()
+    await state.set_state(None)
     msg = await message.answer("🤖 Перевожу...")
     system_prompt = (
         f"Тебе передано слово: «{lang_input}»\n\n"
@@ -413,18 +386,15 @@ async def handle_language_input(message: types.Message, state: FSMContext):
     )
     try:
         result = await get_ai_response(text, system_prompt)
-    except Exception as e:
-        await msg.edit_text(ERROR_MESSAGES.get(str(e), ERROR_MESSAGES["unknown_error"]))
+    except Exception:
+        await msg.edit_text(ERROR_MESSAGES["unknown_error"])
         return
-    await msg.edit_text("✅ Готово")
-    await message.answer(
+    await state.update_data(last_text=result)
+    await msg.edit_text(
         f"✅ **Готово:**\n\n{result}\n\nЧто сделать с текстом?",
         parse_mode="Markdown",
         reply_markup=get_result_menu()
     )
-    await state.update_data(last_text=result)
-
-# --- ФЛОУ БРИФ ВСТРЕЧИ ---
 
 @dp.message(BotStates.waiting_for_meeting_file, F.document)
 async def handle_meeting_file(message: types.Message, state: FSMContext):
@@ -458,8 +428,8 @@ async def handle_meeting_file(message: types.Message, state: FSMContext):
     try:
         prompts = load_prompts()
         result = await get_ai_response(raw[:15000], prompts["meeting_brief"]["prompt"])
-    except Exception as e:
-        await msg.edit_text(ERROR_MESSAGES.get(str(e), ERROR_MESSAGES["unknown_error"]))
+    except Exception:
+        await msg.edit_text(ERROR_MESSAGES["unknown_error"])
         return
     await state.update_data(last_text=result)
     await msg.edit_text(
@@ -468,13 +438,18 @@ async def handle_meeting_file(message: types.Message, state: FSMContext):
         reply_markup=get_result_menu()
     )
 
-# ADD_PROMPT_FEATURE:
-# @dp.callback_query(F.data == "add_new_prompt")
-# async def add_prompt_start(callback, state): ...
-# @dp.message(BotStates.waiting_for_name)
-# async def add_prompt_name(message, state): ...
-# @dp.message(BotStates.waiting_for_content)
-# async def add_prompt_finish(message, state): ...
+# --- ТЕКСТ (всегда последний) ---
+
+@dp.message(F.text)
+async def handle_text(message: types.Message, state: FSMContext):
+    if not check_rate_limit(message.from_user.id):
+        await message.answer(ERROR_MESSAGES["rate_limit"])
+        return
+    if len(message.text) > MAX_TEXT_LENGTH:
+        await message.answer(f"📄 Текст слишком длинный. Максимум — {MAX_TEXT_LENGTH} символов.")
+        return
+    await state.update_data(last_text=message.text)
+    await message.answer("Выберите действие:", reply_markup=get_main_menu())
 
 async def main():
     await dp.start_polling(bot)
