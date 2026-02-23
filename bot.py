@@ -14,6 +14,12 @@ from aiogram.types import InlineKeyboardButton
 from config import BOT_TOKEN, TEMP_DIR
 from core.ai_client import transcribe_voice, get_ai_response, text_to_speech
 from core.keyboards import get_main_menu, get_submenu
+from aiogram.types import ReplyKeyboardMarkup, KeyboardButton
+
+START_KB = ReplyKeyboardMarkup(
+    keyboard=[[KeyboardButton(text="/start")]],
+    resize_keyboard=True
+)
 
 logging.basicConfig(level=logging.INFO)
 
@@ -125,7 +131,7 @@ async def cmd_start(message: types.Message):
                 json.dump(users, f)
     except Exception:
         pass
-    await message.answer(WELCOME_TEXT)
+    await message.answer(WELCOME_TEXT, reply_markup=START_KB)
 
 @dp.message(Command("help"))
 async def cmd_help(message: types.Message):
