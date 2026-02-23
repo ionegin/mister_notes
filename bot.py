@@ -19,11 +19,14 @@ logging.basicConfig(level=logging.INFO)
 
 WELCOME_TEXT = (
     "Привет! Я помогу обработать текст или голос.\n\n"
-    "Умею: сократить, перевести на любой язык, изменить стиль.\n"
     "Пришли текст, голосовуху или кругляшок — и увидишь что можно сделать.\n\n"
+    "Пришли несколько голосовых/кружочков одним репостом, чтобы расшифровать их вместе"
     "Команды:\n"
+    "Умею бережно сокращать сообщения до основных тезисов,, переводить на любой существующий в Мире язык, изменять стиль сообщений.\n"
+   
     "/help — список команд\n"
     "/rawvoice — следующая голосовуха без вычитки ИИ"
+    
 )
 
 HELP_TEXT = (
@@ -118,6 +121,16 @@ def get_result_menu(can_compress: bool = False):
 
 @dp.message(Command("start"))
 async def cmd_start(message: types.Message):
+    user_id = message.from_user.id
+    try:
+        with open("data/users.json", "r+", encoding="utf-8") as f:
+            users = json.load(f)
+            if user_id not in users:
+                users.append(user_id)
+                f.seek(0)
+                json.dump(users, f)
+    except Exception:
+        pass
     await message.answer(WELCOME_TEXT)
 
 @dp.message(Command("help"))
@@ -129,7 +142,30 @@ async def cmd_rawvoice(message: types.Message, state: FSMContext):
     await state.update_data(raw_mode=True)
     await message.answer("Окей, следующая голосовуха вернётся без вычитки.")
 
+<<<<<<< Updated upstream
 # --- ГОЛОС С ОБЪЕДИНЕНИЕМ ---
+=======
+@dp.message(Command("broadcast"))
+async def cmd_broadcast(message: types.Message):
+    if message.from_user.id != ADMIN_ID:
+        return
+    text = message.text.replace("/broadcast", "").strip()
+    if not text:
+        await message.answer("Напиши текст после команды:\n/broadcast Привет всем!")
+        return
+    with open("data/users.json", "r", encoding="utf-8") as f:
+        users = json.load(f)
+    ok, fail = 0, 0
+    for user_id in users:
+        try:
+            await bot.send_message(user_id, text)
+            ok += 1
+        except Exception:
+            fail += 1
+    await message.answer(f"✅ Отправлено: {ok}\n❌ Не доставлено: {fail}")
+    
+# --- СКЛЕЙКА ГОЛОСОВЫХ ---
+>>>>>>> Stashed changes
 
 async def transcribe_and_cleanup(file_path: str, prompts: dict) -> str:
     raw_text = await transcribe_voice(file_path)
