@@ -13,7 +13,7 @@ from aiogram.types import InlineKeyboardButton
 
 from config import BOT_TOKEN, TEMP_DIR
 from core.ai_client import transcribe_voice, get_ai_response, text_to_speech
-from core.keyboards import get_main_menu, get_submenu
+from core.keyboards import get_main_menu, get_submenu, get_result_menu
 from aiogram.types import ReplyKeyboardMarkup, KeyboardButton
 
 START_KB = ReplyKeyboardMarkup(
@@ -108,14 +108,6 @@ def parse_can_compress(result: str) -> tuple[str, bool]:
             clean_lines.append(line)
     return "\n".join(clean_lines).strip(), can_compress
 
-def get_result_menu(can_compress: bool = False):
-    builder = InlineKeyboardBuilder()
-    builder.row(InlineKeyboardButton(text="🔊 Озвучить", callback_data="tts_result"))
-    if can_compress:
-        builder.row(InlineKeyboardButton(text="⚡️ Сжать сильнее", callback_data="ai_summarize_harder"))
-    for row in get_main_menu().inline_keyboard:
-        builder.row(*row)
-    return builder.as_markup()
 
 # --- СТАРТ / HELP ---
 
