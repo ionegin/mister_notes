@@ -172,7 +172,7 @@ async def flush_voice_queue(user_id: int, state: FSMContext):
     file_ids = entry["file_ids"]
     status_msg = entry["status_msg"]
     prompts = load_prompts()
-    semaphore = asyncio.Semaphore(3)
+    semaphore = asyncio.Semaphore(1)
 
     async def process_one(file_id, ext):
         path = os.path.join(TEMP_DIR, f"{file_id}.{ext}")
