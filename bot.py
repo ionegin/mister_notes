@@ -28,7 +28,7 @@ WELCOME_TEXT = (
     "/rawvoice — следующая голосовуха без вычитки ИИ"
     
 )
-
+                
 HELP_TEXT = (
     "📖 **Команды:**\n\n"
     "/start — приветствие\n"
@@ -142,9 +142,8 @@ async def cmd_rawvoice(message: types.Message, state: FSMContext):
     await state.update_data(raw_mode=True)
     await message.answer("Окей, следующая голосовуха вернётся без вычитки.")
 
-<<<<<<< Updated upstream
 # --- ГОЛОС С ОБЪЕДИНЕНИЕМ ---
-=======
+
 @dp.message(Command("broadcast"))
 async def cmd_broadcast(message: types.Message):
     if message.from_user.id != ADMIN_ID:
@@ -165,7 +164,7 @@ async def cmd_broadcast(message: types.Message):
     await message.answer(f"✅ Отправлено: {ok}\n❌ Не доставлено: {fail}")
     
 # --- СКЛЕЙКА ГОЛОСОВЫХ ---
->>>>>>> Stashed changes
+
 
 async def transcribe_and_cleanup(file_path: str, prompts: dict) -> str:
     raw_text = await transcribe_voice(file_path)
