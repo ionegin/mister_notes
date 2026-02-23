@@ -33,20 +33,20 @@ WELCOME_TEXT = (
 )
 
 HELP_TEXT = (
-    "📖 <b>Команды:</b>\n\n"
+    "📖 **Команды:**\n\n"
     "/start — приветствие\n"
     "/help — эта справка\n"
     "/rawvoice — следующая голосовуха вернётся сырой (без ИИ-вычитки)\n\n"
-    "<b>Как пользоваться:</b>\n"
+    "**Как пользоваться:**\n"
     "• Пришли текст → выбери действие из меню\n"
     "• Пришли голосовое или кругляшок → расшифровка → меню\n"
     "• Несколько голосовых/кружочков подряд — объединятся автоматически\n\n"
-    "<b>Лимиты:</b>\n"
+    "**Лимиты:**\n"
     "• Голос / видео — до 10 минут\n"
     "• Текст — до 3000 символов (~1.5 страницы А4)"
 )
 
-ADMIN_ID = 250656533
+ADMIN_ID = 250656533  # замени на свой Telegram user_id
 
 MAX_VOICE_DURATION = 600
 MAX_TEXT_LENGTH = 3000
@@ -108,8 +108,6 @@ def parse_can_compress(result: str) -> tuple[str, bool]:
             clean_lines.append(line)
     return "\n".join(clean_lines).strip(), can_compress
 
-def escape_html(text: str) -> str:
-    return text.replace("&", "&amp;").replace("<", "&lt;").replace(">", "&gt;")
 
 # --- СТАРТ / HELP ---
 
@@ -122,7 +120,6 @@ async def cmd_start(message: types.Message):
             if user_id not in users:
                 users.append(user_id)
                 f.seek(0)
-                f.truncate()
                 json.dump(users, f)
     except Exception:
         pass
@@ -130,7 +127,7 @@ async def cmd_start(message: types.Message):
 
 @dp.message(Command("help"))
 async def cmd_help(message: types.Message):
-    await message.answer(HELP_TEXT, parse_mode="HTML")
+    await message.answer(HELP_TEXT, parse_mode="Markdown")
 
 @dp.message(Command("rawvoice"))
 async def cmd_rawvoice(message: types.Message, state: FSMContext):
@@ -193,10 +190,10 @@ async def flush_voice_queue(user_id: int, state: FSMContext):
     combined = "\n\n---\n\n".join(texts)
     await state.update_data(last_text=combined)
     count = len(texts)
-    label = f"📝 <b>Расшифровка ({count} сообщений):</b>\n\n" if count > 1 else "📝 <b>Расшифровка:</b>\n\n"
+    label = f"📝 **Расшифровка ({count} сообщений):**\n\n" if count > 1 else "📝 **Расшифровка:**\n\n"
     await status_msg.edit_text(
-        f"{label}{escape_html(combined)}\n\nВыберите действие:",
-        parse_mode="HTML",
+        f"{label}{combined}\n\nВыберите действие:",
+        parse_mode="Markdown",
         reply_markup=get_main_menu()
     )
 
@@ -226,7 +223,7 @@ async def handle_voice(message: types.Message, state: FSMContext):
         finally:
             if os.path.exists(ogg_path):
                 os.remove(ogg_path)
-        await message.answer(f"📝 <b>Сырая расшифровка:</b>\n\n{escape_html(raw_text)}", parse_mode="HTML")
+        await message.answer(f"📝 **Сырая расшифровка:**\n\n{raw_text}", parse_mode="Markdown")
         return
 
     async with voice_lock:
@@ -267,7 +264,7 @@ async def handle_video_note(message: types.Message, state: FSMContext):
         finally:
             if os.path.exists(mp4_path):
                 os.remove(mp4_path)
-        await message.answer(f"📝 <b>Сырая расшифровка:</b>\n\n{escape_html(raw_text)}", parse_mode="HTML")
+        await message.answer(f"📝 **Сырая расшифровка:**\n\n{raw_text}", parse_mode="Markdown")
         return
 
     async with voice_lock:
@@ -361,13 +358,13 @@ async def process_ai_action(callback: types.CallbackQuery, state: FSMContext):
 
     await state.update_data(last_text=result)
     await callback.message.answer(
-        f"✅ <b>Готово:</b>\n\n{escape_html(result)}\n\nЧто сделать с текстом?",
-        parse_mode="HTML",
+        f"✅ **Готово:**\n\n{result}\n\nЧто сделать с текстом?",
+        parse_mode="Markdown",
         reply_markup=get_result_menu(can_compress)
     )
     await callback.answer()
 
-# --- FSM ХЕНДЛЕРЫ ---
+# --- FSM ХЕНДЛЕРЫ (выше handle_text) ---
 
 @dp.message(BotStates.waiting_for_language)
 async def handle_language_input(message: types.Message, state: FSMContext):
@@ -392,8 +389,8 @@ async def handle_language_input(message: types.Message, state: FSMContext):
         return
     await state.update_data(last_text=result)
     await msg.edit_text(
-        f"✅ <b>Готово:</b>\n\n{escape_html(result)}\n\nЧто сделать с текстом?",
-        parse_mode="HTML",
+        f"✅ **Готово:**\n\n{result}\n\nЧто сделать с текстом?",
+        parse_mode="Markdown",
         reply_markup=get_result_menu()
     )
 
@@ -434,8 +431,8 @@ async def handle_meeting_file(message: types.Message, state: FSMContext):
         return
     await state.update_data(last_text=result)
     await msg.edit_text(
-        f"✅ <b>Бриф:</b>\n\n{escape_html(result)}\n\nЧто сделать с текстом?",
-        parse_mode="HTML",
+        f"✅ **Бриф:**\n\n{result}\n\nЧто сделать с текстом?",
+        parse_mode="Markdown",
         reply_markup=get_result_menu()
     )
 
