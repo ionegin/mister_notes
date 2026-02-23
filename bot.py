@@ -49,7 +49,7 @@ HELP_TEXT = (
 ADMIN_ID = 250656533
 
 MAX_VOICE_DURATION = 600
-MAX_TEXT_LENGTH = 3000
+MAX_TEXT_LENGTH = 4000
 
 user_requests: dict = {}
 pending_voices: dict = {}
