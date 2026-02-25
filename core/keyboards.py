@@ -22,10 +22,9 @@ def get_main_menu():
 
 
 def get_result_menu(can_compress: bool = False):
-    """Второе меню — после любой обработки. Опционально добавляет 'Сжать сильнее'"""
+    """Второе меню — после любой обработки. Всегда показывает 'Сжать сильнее'"""
     builder = InlineKeyboardBuilder()
-    if can_compress:
-        builder.row(InlineKeyboardButton(text="⚡️ Сжать сильнее", callback_data="ai_summarize_harder"))
+    builder.row(InlineKeyboardButton(text="⚡️ Сжать сильнее", callback_data="ai_summarize_harder"))
     with open("data/prompts.json", "r", encoding="utf-8") as f:
         prompts = json.load(f)
     for p_id in RESULT_MENU_IDS:
