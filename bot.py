@@ -172,23 +172,35 @@ async def flush_voice_queue(user_id: int, state: FSMContext):
     file_ids = entry["file_ids"]
     status_msg = entry["status_msg"]
     prompts = load_prompts()
-    semaphore = asyncio.Semaphore(1)
 
-    async def process_one(file_id, ext):
+    # ЭТАП 1: параллельное скачивание всех файлов (быстро, не тратит API-лимиты)
+    async def download_one(file_id, ext):
         path = os.path.join(TEMP_DIR, f"{file_id}.{ext}")
-        async with semaphore:
-            try:
-                tg_file = await bot.get_file(file_id)
-                await bot.download_file(tg_file.file_path, path)
-                return await transcribe_and_cleanup(path, prompts)
-            except Exception:
-                return "[ошибка расшифровки]"
-            finally:
-                if os.path.exists(path):
-                    os.remove(path)
+        try:
+            tg_file = await bot.get_file(file_id)
+            await bot.download_file(tg_file.file_path, path)
+            return path
+        except Exception:
+            logging.error(f"Download failed for {file_id}")
+            return None
 
-    results = await asyncio.gather(*[process_one(fid, ext) for fid, ext in file_ids])
-    texts = list(results)
+    paths = await asyncio.gather(*[download_one(fid, ext) for fid, ext in file_ids])
+
+    # ЭТАП 2: последовательная обработка через Groq (с паузами между запросами)
+    texts = []
+    for path in paths:
+        if path is None:
+            texts.append("[ошибка скачивания]")
+            continue
+        try:
+            result = await transcribe_and_cleanup(path, prompts)
+            texts.append(result)
+        except Exception:
+            texts.append("[ошибка расшифровки]")
+        finally:
+            if os.path.exists(path):
+                os.remove(path)
+        await asyncio.sleep(1.5)  # пауза между файлами, чтобы не триггерить RPM
 
     combined = "\n\n---\n\n".join(texts)
     await state.update_data(last_text=combined)
@@ -345,12 +357,12 @@ async def process_ai_action(callback: types.CallbackQuery, state: FSMContext):
         await callback.answer("Текст не найден. Пришлите сообщение заново.")
         return
 
+    await callback.answer()
     await callback.message.answer("🤖 Думаю...")
     try:
         raw_result = await get_ai_response(text, button['prompt'])
     except Exception:
         await callback.message.answer(ERROR_MESSAGES["unknown_error"])
-        await callback.answer()
         return
 
     if prompt_id in ("summarize", "summarize_harder"):
@@ -365,7 +377,6 @@ async def process_ai_action(callback: types.CallbackQuery, state: FSMContext):
         parse_mode="HTML",
         reply_markup=get_result_menu(can_compress)
     )
-    await callback.answer()
 
 # --- FSM ХЕНДЛЕРЫ ---
 
