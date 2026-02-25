@@ -53,7 +53,9 @@ MAX_TEXT_LENGTH = 4000
 
 user_requests: dict = {}
 pending_voices: dict = {}
+pending_texts: dict = {}
 voice_lock = asyncio.Lock()
+text_lock = asyncio.Lock()
 
 def check_rate_limit(user_id: int, max_requests: int = 10, window: int = 60) -> bool:
     now = time.time()
@@ -450,6 +452,36 @@ async def handle_meeting_file(message: types.Message, state: FSMContext):
         reply_markup=get_result_menu()
     )
 
+# --- СКЛЕЙКА ТЕКСТОВ ---
+
+async def flush_text_queue(user_id: int, state: FSMContext):
+    await asyncio.sleep(3.0)
+    entry = pending_texts.pop(user_id, None)
+    if not entry:
+        return
+
+    combined = "\n\n".join(entry["texts"])
+    status_msg = entry["status_msg"]
+    await state.update_data(last_text=combined)
+
+    count = len(entry["texts"])
+    if count > 1:
+        label = f"📝 <b>Получено ({count} сообщений, {len(combined)} символов):</b>\n\n"
+    else:
+        label = ""
+
+    # Если текст короткий — показываем его, иначе только счётчик
+    if len(combined) <= 500:
+        display = f"{label}{escape_html(combined)}\n\nВыберите действие:"
+    else:
+        display = f"{label}Текст принят ({len(combined)} символов).\n\nВыберите действие:"
+
+    await status_msg.edit_text(
+        display,
+        parse_mode="HTML",
+        reply_markup=get_main_menu()
+    )
+
 # --- ТЕКСТ (всегда последний) ---
 
 @dp.message(F.text)
@@ -457,11 +489,21 @@ async def handle_text(message: types.Message, state: FSMContext):
     if not check_rate_limit(message.from_user.id):
         await message.answer(ERROR_MESSAGES["rate_limit"])
         return
-    if len(message.text) > MAX_TEXT_LENGTH:
-        await message.answer(f"📄 Текст слишком длинный. Максимум — {MAX_TEXT_LENGTH} символов.")
-        return
-    await state.update_data(last_text=message.text)
-    await message.answer("Выберите действие:", reply_markup=get_main_menu())
+
+    user_id = message.from_user.id
+    text = message.text
+
+    async with text_lock:
+        if user_id in pending_texts:
+            entry = pending_texts[user_id]
+            entry["task"].cancel()
+            entry["texts"].append(text)
+        else:
+            status_msg = await message.answer("✏️ Принимаю текст...")
+            pending_texts[user_id] = {"texts": [text], "task": None, "status_msg": status_msg}
+
+        task = asyncio.create_task(flush_text_queue(user_id, state))
+        pending_texts[user_id]["task"] = task
 
 async def main():
     await dp.start_polling(bot)
