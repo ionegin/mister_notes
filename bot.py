@@ -489,7 +489,14 @@ async def handle_text(message: types.Message, state: FSMContext):
     if not check_rate_limit(message.from_user.id):
         await message.answer(ERROR_MESSAGES["rate_limit"])
         return
-
+    if len(message.text) > MAX_TEXT_LENGTH:
+        await message.answer(f"📄 Текст слишком длинный.")
+        return
+    logging.info("handle_text: сохраняю в state")
+    await state.update_data(last_text=message.text)
+    logging.info("handle_text: отправляю меню")
+    await message.answer("Выберите действие:", reply_markup=get_main_menu())
+    logging.info("handle_text: готово")
     user_id = message.from_user.id
     text = message.text
 
