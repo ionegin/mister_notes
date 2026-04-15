@@ -1,0 +1,14 @@
+.git
+.gitignore
+venv
+.env
+data/temp_audio/
+data/users.json
+__pycache__/
+*.pyc
+*.pyo
+*.pyd
+.db
+fly.toml
+Dockerfile
+.dockerignore

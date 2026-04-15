@@ -143,11 +143,82 @@ async def cmd_broadcast(message: types.Message):
             fail += 1
     await message.answer(f"✅ Отправлено: {ok}\n❌ Не доставлено: {fail}")
 
+# --- КОМАНДЫ УПРАВЛЕНИЯ МОДЕЛЯМИ (admin-only) ---
+# Вставить в bot.py после cmd_broadcast
+
+@dp.message(Command("llm_status"))
+async def cmd_llm_status(message: types.Message):
+    if message.from_user.id != ADMIN_ID:
+        return
+    import config
+    cleanup = config.LLM_REGISTRY[config.LLM_CLEANUP]
+    smart   = config.LLM_REGISTRY[config.LLM_SMART]
+    registry_lines = "\n".join(
+        f"• <code>{k}</code> — {v['label']}"
+        for k, v in config.LLM_REGISTRY.items()
+    )
+    await message.answer(
+        f"🤖 <b>Текущие модели:</b>\n\n"
+        f"🧹 <b>CLEANUP</b> (<code>{config.LLM_CLEANUP}</code>): {cleanup['label']}\n"
+        f"🧠 <b>SMART</b> (<code>{config.LLM_SMART}</code>): {smart['label']}\n\n"
+        f"<b>Доступные ключи:</b>\n{registry_lines}",
+        parse_mode="HTML",
+    )
+
+
+@dp.message(Command("llm1"))
+async def cmd_llm1(message: types.Message):
+    """/llm1 <key> — меняет LLM_CLEANUP (чистка транскрипции)"""
+    if message.from_user.id != ADMIN_ID:
+        return
+    import config
+    key = message.text.replace("/llm1", "").strip()
+    if not key:
+        await message.answer(
+            f"Текущий CLEANUP: <code>{config.LLM_CLEANUP}</code>\n"
+            f"Укажи ключ: <code>/llm1 llama70b</code>",
+            parse_mode="HTML"
+        )
+        return
+    if key not in config.LLM_REGISTRY:
+        await message.answer(f"❌ Неизвестный ключ: <code>{key}</code>", parse_mode="HTML")
+        return
+    config.LLM_CLEANUP = key
+    await message.answer(
+        f"✅ CLEANUP → <code>{key}</code>\n{config.LLM_REGISTRY[key]['label']}",
+        parse_mode="HTML"
+    )
+
+
+@dp.message(Command("llm2"))
+async def cmd_llm2(message: types.Message):
+    """/llm2 <key> — меняет LLM_SMART (саммари, бриф, стили)"""
+    if message.from_user.id != ADMIN_ID:
+        return
+    import config
+    key = message.text.replace("/llm2", "").strip()
+    if not key:
+        await message.answer(
+            f"Текущий SMART: <code>{config.LLM_SMART}</code>\n"
+            f"Укажи ключ: <code>/llm2 gemma4-31b</code>",
+            parse_mode="HTML"
+        )
+        return
+    if key not in config.LLM_REGISTRY:
+        await message.answer(f"❌ Неизвестный ключ: <code>{key}</code>", parse_mode="HTML")
+        return
+    config.LLM_SMART = key
+    await message.answer(
+        f"✅ SMART → <code>{key}</code>\n{config.LLM_REGISTRY[key]['label']}",
+        parse_mode="HTML"
+    )
+
+
 # --- УНИВЕРСАЛЬНАЯ ОЧЕРЕДЬ (текст + голос) ---
 
 async def transcribe_and_cleanup(file_path: str) -> str:
     raw_text = await transcribe_voice(file_path)
-    text = await get_ai_response(raw_text, PROMPTS["transcription_cleanup"])
+    text = await get_ai_response(raw_text, PROMPTS["transcription_cleanup"], role="cleanup")
     return text
 
 async def download_voice_file(file_id: str, ext: str) -> str | None:
