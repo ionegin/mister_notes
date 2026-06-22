@@ -3,6 +3,7 @@ import json
 import logging
 import os
 import time
+from aiohttp import web
 from aiogram import Bot, Dispatcher, F, types
 from aiogram.filters import Command
 from aiogram.fsm.context import FSMContext
@@ -519,7 +520,22 @@ async def handle_text(message: types.Message, state: FSMContext):
         message,
     )
 
+async def health_handler(request):
+    return web.Response(text="ok")
+
+async def start_health_server():
+    port = int(os.getenv("PORT", 8080))
+    app = web.Application()
+    app.router.add_get("/", health_handler)
+    app.router.add_get("/health", health_handler)
+    runner = web.AppRunner(app)
+    await runner.setup()
+    site = web.TCPSite(runner, "0.0.0.0", port)
+    await site.start()
+    logging.info("Health server listening on 0.0.0.0:%s", port)
+
 async def main():
+    await start_health_server()
     await dp.start_polling(bot)
 
 if __name__ == "__main__":
