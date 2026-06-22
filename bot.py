@@ -3,11 +3,13 @@ import json
 import logging
 import os
 import time
+from aiohttp import web
 from aiogram import Bot, Dispatcher, F, types
 from aiogram.filters import Command
 from aiogram.fsm.context import FSMContext
 from aiogram.fsm.state import State, StatesGroup
 from aiogram.types import ReplyKeyboardMarkup, KeyboardButton
+from aiogram.webhook.aiohttp_server import SimpleRequestHandler, setup_application
 
 from config import BOT_TOKEN, TEMP_DIR
 from core.ai_client import transcribe_voice, get_ai_response
@@ -144,7 +146,6 @@ async def cmd_broadcast(message: types.Message):
     await message.answer(f"✅ Отправлено: {ok}\n❌ Не доставлено: {fail}")
 
 # --- КОМАНДЫ УПРАВЛЕНИЯ МОДЕЛЯМИ (admin-only) ---
-# Вставить в bot.py после cmd_broadcast
 
 @dp.message(Command("llm_status"))
 async def cmd_llm_status(message: types.Message):
@@ -519,8 +520,51 @@ async def handle_text(message: types.Message, state: FSMContext):
         message,
     )
 
+# --- HEALTH CHECK для Cloud Run ---
+
+async def health_check(request):
+    return web.Response(text="OK")
+
+# --- WEBHOOK ЗАПУСК ---
+
+async def on_startup():
+    """Устанавливает webhook при старте."""
+    webhook_url = os.getenv("WEBHOOK_URL")
+    if webhook_url:
+        await bot.set_webhook(webhook_url)
+        logging.info(f"Webhook set to: {webhook_url}")
+    else:
+        logging.warning("WEBHOOK_URL not set! Bot won't receive messages.")
+
+async def on_shutdown():
+    """Удаляет webhook при остановке."""
+    await bot.delete_webhook()
+    logging.info("Webhook deleted")
+
 async def main():
-    await dp.start_polling(bot)
+    await on_startup()
+    
+    # Создаём aiohttp приложение
+    app = web.Application()
+    
+    # Health check endpoint для Cloud Run
+    app.router.add_get("/", health_check)
+    
+    # Webhook handler для aiogram
+    SimpleRequestHandler(dispatcher=dp, bot=bot).register(app, path="/webhook")
+    setup_application(app, dp, bot=bot)
+    
+    # Запускаем сервер
+    port = int(os.getenv("PORT", "8080"))
+    runner = web.AppRunner(app)
+    await runner.setup()
+    site = web.TCPSite(runner, "0.0.0.0", port)
+    await site.start()
+    
+    logging.info(f"Server started on port {port}")
+    
+    # Ждём бесконечно
+    await asyncio.Event().wait()
 
 if __name__ == "__main__":
     asyncio.run(main())
