@@ -4,8 +4,15 @@ import logging
 from openai import AsyncOpenAI
 from config import GROQ_KEY, LLM_REGISTRY
 
-# Groq — только для транскрипции (Whisper). Не трогаем.
-groq_client = groq.Groq(api_key=GROQ_KEY)
+# Groq — только для транскрипции (Whisper). Ленивая инициализация при первом вызове.
+_groq_client = None
+
+
+def _get_groq_client():
+    global _groq_client
+    if _groq_client is None:
+        _groq_client = groq.Groq(api_key=GROQ_KEY)
+    return _groq_client
 
 # Кэш клиентов — один экземпляр на провайдера
 _clients: dict[str, AsyncOpenAI] = {}
@@ -30,7 +37,7 @@ async def transcribe_voice(file_path: str, max_retries: int = 3) -> str:
     for attempt in range(max_retries):
         try:
             result = await asyncio.to_thread(
-                lambda: groq_client.audio.transcriptions.create(
+                lambda: _get_groq_client().audio.transcriptions.create(
                     file=(file_path, file_content),
                     model="whisper-large-v3",
                     language="ru",

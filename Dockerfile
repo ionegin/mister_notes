@@ -16,4 +16,4 @@ COPY . .
 # Create data directory if it doesn't exist (though we copy it, just to be safe)
 RUN mkdir -p data/temp_audio
 
-CMD ["python", "bot.py"]
+CMD ["python", "run.py"]
