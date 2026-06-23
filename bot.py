@@ -548,11 +548,16 @@ async def main():
     app = web.Application()
     
     # Health check endpoint для Cloud Run
+    
     app.router.add_get("/", health_check)
     
     # Webhook handler для aiogram
-    SimpleRequestHandler(dispatcher=dp, bot=bot).register(app, path="/webhook")
-    setup_application(app, dp, bot=bot)
+    async def webhook_handler(request):
+        data = await request.json()
+        update = types.Update(**data)
+        await dp.process_update(update)
+        return web.Response(status=200)
+app.router.add_post('/webhook', webhook_handler)
     
     # Запускаем сервер
     port = int(os.getenv("PORT", "8080"))
