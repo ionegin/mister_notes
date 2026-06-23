@@ -9,7 +9,6 @@ from aiogram.filters import Command
 from aiogram.fsm.context import FSMContext
 from aiogram.fsm.state import State, StatesGroup
 from aiogram.types import ReplyKeyboardMarkup, KeyboardButton
-from aiogram.webhook.aiohttp_server import SimpleRequestHandler, setup_application
 
 from config import BOT_TOKEN, TEMP_DIR
 from core.ai_client import transcribe_voice, get_ai_response
@@ -29,7 +28,6 @@ WELCOME_TEXT = (
     "— Кристаллизует информацию до ключевых идей — с приоритетом по важности\n"
     "— Сжимает ещё сильнее если нужен совсем короткий результат\n"
     "— Переводит на любой язык\n"
-
     "👉 Нажмите /start, пришлите боту голосовых и кружочков — дождитесь расшифровки и нажмите «Сократить». Сами всё поймёте 😌\n\n"
     "Команды:\n"
     "/help — список команд\n"
@@ -567,3 +565,6 @@ async def main():
     
     logging.info(f"Server started on port {port}")
     await asyncio.Event().wait()
+
+if __name__ == "__main__":
+    asyncio.run(main())
