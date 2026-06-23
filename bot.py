@@ -544,22 +544,21 @@ async def on_shutdown():
 async def main():
     await on_startup()
     
-    # Создаём aiohttp приложение
     app = web.Application()
-    
-    # Health check endpoint для Cloud Run
-    
     app.router.add_get("/", health_check)
     
-    # Webhook handler для aiogram
     async def webhook_handler(request):
-        data = await request.json()
-        update = types.Update(**data)
-        await dp.process_update(update)
-        return web.Response(status=200)
-app.router.add_post('/webhook', webhook_handler)
+        try:
+            data = await request.json()
+            update = types.Update(**data)
+            await dp.process_update(update)
+            return web.Response(status=200)
+        except Exception as e:
+            logging.error(f"Webhook error: {e}")
+            return web.Response(status=500)
     
-    # Запускаем сервер
+    app.router.add_post("/webhook", webhook_handler)
+    
     port = int(os.getenv("PORT", "8080"))
     runner = web.AppRunner(app)
     await runner.setup()
@@ -567,9 +566,4 @@ app.router.add_post('/webhook', webhook_handler)
     await site.start()
     
     logging.info(f"Server started on port {port}")
-    
-    # Ждём бесконечно
     await asyncio.Event().wait()
-
-if __name__ == "__main__":
-    asyncio.run(main())
