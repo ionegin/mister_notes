@@ -3,7 +3,6 @@ import json
 import logging
 import os
 import time
-from aiohttp import web
 from aiogram import Bot, Dispatcher, F, types
 from aiogram.filters import Command
 from aiogram.fsm.context import FSMContext
@@ -518,53 +517,23 @@ async def handle_text(message: types.Message, state: FSMContext):
         message,
     )
 
-# --- HEALTH CHECK для Cloud Run ---
-
-async def health_check(request):
-    return web.Response(text="OK")
-
-# --- WEBHOOK ЗАПУСК ---
-
-async def on_startup():
-    """Устанавливает webhook при старте."""
-    webhook_url = os.getenv("WEBHOOK_URL")
-    if webhook_url:
-        await bot.set_webhook(webhook_url)
-        logging.info(f"Webhook set to: {webhook_url}")
-    else:
-        logging.warning("WEBHOOK_URL not set! Bot won't receive messages.")
-
-async def on_shutdown():
-    """Удаляет webhook при остановке."""
-    await bot.delete_webhook()
-    logging.info("Webhook deleted")
+# --- ЗАПУСК (long polling) ---
+# Раньше здесь был webhook + aiohttp-сервер. На Cloud Run это давало гонку:
+# on_shutdown() старого инстанса удалял вебхук, который новый инстанс только что
+# поставил. Polling этой проблемы не создаёт в принципе — бот сам стучится
+# в Telegram API, никакой публичный URL/HTTP-сервер не нужен.
+#
+# Health-check эндпоинт пока убран — Railway не требует HTTP healthcheck по
+# умолчанию (в отличие от Cloud Run). Если в Задаче 3 понадобится healthcheck —
+# поднимать его отдельной aiohttp-задачей параллельно через asyncio.gather(),
+# не смешивая с приёмом апдейтов (как было раньше через /webhook).
 
 async def main():
-    await on_startup()
-    
-    app = web.Application()
-    app.router.add_get("/", health_check)
-    
-    async def webhook_handler(request):
-        try:
-            data = await request.json()
-            update = types.Update(**data)
-            await dp.process_update(update)
-            return web.Response(status=200)
-        except Exception as e:
-            logging.error(f"Webhook error: {e}")
-            return web.Response(status=500)
-    
-    app.router.add_post("/webhook", webhook_handler)
-    
-    port = int(os.getenv("PORT", "8080"))
-    runner = web.AppRunner(app)
-    await runner.setup()
-    site = web.TCPSite(runner, "0.0.0.0", port)
-    await site.start()
-    
-    logging.info(f"Server started on port {port}")
-    await asyncio.Event().wait()
+    # На всякий случай гасим старый вебхук (например, оставшийся от Cloud Run) —
+    # безопасно выполнить один раз при старте, в отличие от удаления при shutdown.
+    await bot.delete_webhook(drop_pending_updates=True)
+    logging.info("Starting polling...")
+    await dp.start_polling(bot)
 
 if __name__ == "__main__":
     asyncio.run(main())

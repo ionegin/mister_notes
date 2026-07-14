@@ -12,4 +12,4 @@ COPY . .
 
 RUN mkdir -p data/temp_audio
 
-CMD ["python", "bot.py"]
+CMD ["python", "run.py"]
